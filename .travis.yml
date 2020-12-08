@@ -72,6 +72,7 @@ script:
        ./OsEID-tool EC-UPLOAD-KEYS;
        ./OsEID-tool EC-SIGN-TEST;
        ./OsEID-tool EC-ECDH-TEST;
+       ./OsEID-tool DES-AES-UPLOAD-KEYS;
        kill -9 $PID;
        set +ex;
     fi

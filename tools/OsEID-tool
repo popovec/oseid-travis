@@ -27,8 +27,6 @@
 #
 #export OPENSC_DEBUG=255
 
-export LC_ALL="C"
-
 failecho (){
 	tput setaf 1;echo $@;tput sgr0
 }
@@ -398,7 +396,7 @@ else
 	rndCMD='(echo "00 84 00 00 08"; echo "00 c0 00 00 08")'
 fi
 eval $rndCMD|scriptor "${SCReaderFlag}" "${SCReader}" -p ${PROTO} 2>/dev/null
-done|gawk '{
+done|gawk -b '{
 if($0 ~ "Normal" )
  {
    printf(".") > "/dev/stderr" 
@@ -897,7 +895,7 @@ dd if=tmp/rsa_sign_testfile.txt bs=${LEN} count=1 of=tmp/rsa_sign_testfile_${LEN
 echo "using pkcs11 interface to sign message, mechanism RSA-X-509"
 rm -f  tmp/rsa_sign_testfile.txt.sign
 echo -n "ttt" > tmp/rsa_sign_testfile_short.txt
-gawk -v LEN=${LEN} '{for(i=0;i<LEN-1-length($0);i++)printf("%c",0);printf("%c%s",0,$0);exit}' tmp/rsa_sign_testfile_short.txt >tmp/rsa_sign_testfile_x509.txt
+gawk -b -v LEN=${LEN} '{for(i=0;i<LEN-1-length($0);i++)printf("%c",0);printf("%c%s",0,$0);exit}' tmp/rsa_sign_testfile_short.txt >tmp/rsa_sign_testfile_x509.txt
 pkcs11-tool --slot-index ${SCSlot} --sign  -m RSA-X-509\
 	--id $keyID \
 	--input-file tmp/rsa_sign_testfile_x509.txt \
@@ -922,7 +920,9 @@ fi
 
 # RSA-PKCS
 echo "using pkcs11 interface to sign message, mechanism RSA-PKCS"
-rm -f  tmp/rsa_sign_testfile.txt.sign
+rm -f tmp/rsa_sign_testfile.txt.sign
+rm -f tmp/rsa_sign_testfile.txt.sign_verify1 tmp/rsa_sign_testfile.txt.sign_verify2
+
 echo -n "ttt" > tmp/rsa_sign_testfile_short.txt
 pkcs11-tool --slot-index ${SCSlot} --sign  -m RSA-PKCS \
 	--id $keyID \
@@ -933,7 +933,7 @@ if [ $? -eq 0 ]; then
 	echo "testing RSA-PKCS signature"
 	openssl rsautl -raw -verify -pubin -inkey tmp/exported_rsa_key.pub < tmp/rsa_sign_testfile.txt.sign > tmp/rsa_sign_testfile.txt.sign_verify1
 	# create testfile with padding...
-	gawk -v LEN=${LEN} '{LEN=LEN-3;LEN=LEN-length($0);printf("%c%c",0,1);for(i=0;i<LEN;i++)printf("%c",255);printf("%c%s",0,$0);exit}' tmp/rsa_sign_testfile_short.txt >tmp/rsa_sign_testfile.txt.sign_verify2
+	gawk -b -v LEN=${LEN} '{LEN=LEN-3;LEN=LEN-length($0);printf("%c%c",0,1);for(i=0;i<LEN;i++)printf("%c",255);printf("%c%s",0,$0);exit}' tmp/rsa_sign_testfile_short.txt >tmp/rsa_sign_testfile.txt.sign_verify2
 	cmp tmp/rsa_sign_testfile.txt.sign_verify1 tmp/rsa_sign_testfile.txt.sign_verify2
 	if [ $?	-ne 0 ]; then
 		failecho "RSA-PKCS signature fail"
