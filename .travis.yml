@@ -4,7 +4,9 @@ matrix:
     - compiler: gcc
       os: linux
       dist: bionic
-      env: RUN_TESTS=yes
+      env:
+        - RUN_TESTS=yes
+        - OPENSC_FROM_GIT=no
 
 
 addons:
@@ -21,10 +23,10 @@ addons:
     - ant
     - socat
     - cmake
-      
+    - opensc
    
 befire_script:
-  - if [ "${RUN_TESTS}" = "yes" ]; then
+  - if [ "${OPENSC_FROM_GIT}" = "yes" ]; then
        git clone https://github.com/OpenSC/OpenSC;
        set -ex;
        cd OpenSC/;
@@ -40,7 +42,7 @@ befire_script:
 script:
   - if [ "${RUN_TESTS}" = "yes" ]; then
        cd ${TRAVIS_BUILD_DIR};
-       cd oseid/src/;
+       cd oseid-travis/src/;
        make -f Makefile.console;
        set -ex
        mkdir tmp;
@@ -49,15 +51,15 @@ script:
        sleep 1;
        echo "# OsEIDsim" > tmp/reader.conf;
        echo 'FRIENDLYNAME      "OsEIDsim"' >> tmp/reader.conf;
-       echo "DEVICENAME        ${TRAVIS_BUILD_DIR}/oseid/src/tmp/OsEIDsim.socket" >> tmp/reader.conf;
-       echo "LIBPATH           ${TRAVIS_BUILD_DIR}/oseid/src/build/console/libOsEIDsim.so.0.0.1" >> tmp/reader.conf;
+       echo "DEVICENAME        ${TRAVIS_BUILD_DIR}/oseid-travis/src/tmp/OsEIDsim.socket" >> tmp/reader.conf;
+       echo "LIBPATH           ${TRAVIS_BUILD_DIR}/oseid-travis/src/build/console/libOsEIDsim.so.0.0.1" >> tmp/reader.conf;
        echo "CHANNELID         1" >> tmp/reader.conf;
        sudo mv tmp/reader.conf /etc/reader.conf.d/reader.conf;
        cat /etc/reader.conf.d/reader.conf;
        cd $TRAVIS_BUILD_DIR;
        sudo systemctl stop pcscd.service pcscd.socket;
        sudo systemctl start pcscd.service pcscd.socket;
-       cd oseid/tools;
+       cd oseid-travis/tools;
        echo | ./OsEID-tool INIT;
        ./OsEID-tool RSA-CREATE-KEYS;
        ./OsEID-tool RSA-UPLOAD-KEYS;
