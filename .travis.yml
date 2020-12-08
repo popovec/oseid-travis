@@ -1,0 +1,72 @@
+language: c
+matrix:
+  include:
+    - compiler: gcc
+      os: linux
+      dist: bionic
+      env: RUN_TESTS=yes
+
+
+addons:
+  apt_packages:
+    - docbook-xsl
+    - libpcsclite-dev
+    - xsltproc
+    - gengetopt
+    - libcmocka-dev
+    - help2man
+    - pcscd
+    - pcsc-tools
+    - check
+    - ant
+    - socat
+    - cmake
+      
+   
+befire_script:
+  - if [ "${RUN_TESTS}" = "yes" ]; then
+       git clone https://github.com/OpenSC/OpenSC;
+       set -ex;
+       cd OpenSC/;
+       ./bootstrap;
+       ./configure;
+       sudo make install;
+       export LD_LIBRARY_PATH=/usr/local/lib;
+       cd ${TRAVIS_BUILD_DIR};
+    fi
+    
+   
+       
+script:
+  - if [ "${RUN_TESTS}" = "yes" ]; then
+       cd ${TRAVIS_BUILD_DIR};
+       cd oseid/src/;
+       make -f Makefile.console;
+       set -ex
+       mkdir tmp;
+       socat -d -d pty,link=tmp/OsEIDsim.socket,raw,echo=0 "exec:build/console/console ...,pty,raw,echo=0" &
+       PID=$!;
+       sleep 1;
+       echo "# OsEIDsim" > tmp/reader.conf;
+       echo 'FRIENDLYNAME      "OsEIDsim"' >> tmp/reader.conf;
+       echo "DEVICENAME        ${TRAVIS_BUILD_DIR}/oseid/src/tmp/OsEIDsim.socket" >> tmp/reader.conf;
+       echo "LIBPATH           ${TRAVIS_BUILD_DIR}/oseid/src/build/console/libOsEIDsim.so.0.0.1" >> tmp/reader.conf;
+       echo "CHANNELID         1" >> tmp/reader.conf;
+       sudo mv tmp/reader.conf /etc/reader.conf.d/reader.conf;
+       cat /etc/reader.conf.d/reader.conf;
+       cd $TRAVIS_BUILD_DIR;
+       sudo systemctl stop pcscd.service pcscd.socket;
+       sudo systemctl start pcscd.service pcscd.socket;
+       cd oseid/tools;
+       echo | ./OsEID-tool INIT;
+       ./OsEID-tool RSA-CREATE-KEYS;
+       ./OsEID-tool RSA-UPLOAD-KEYS;
+       ./OsEID-tool RSA-DECRYPT-TEST;
+       ./OsEID-tool RSA-SIGN-PKCS11-TEST;
+       ./OsEID-tool EC-CREATE-KEYS;
+       ./OsEID-tool EC-UPLOAD-KEYS;
+       ./OsEID-tool EC-SIGN-TEST;
+       ./OsEID-tool EC-ECDH-TEST;
+       kill -9 $PID;
+       set +ex;
+    fi
