@@ -1,13 +1,9 @@
 Description
 
-Atmega 128 microcontroller based open source EID smartcard with RSA
-(512-2048) and ECC - ECDSA and ECDH operations on prime192v1, prime256v1,
-secp384r1, secp256k1 and secp521r1. Compatible with MyEID card from Aventra.
-Supported in windows and linux by opensc package.  Allow about 64KiB space
-for keys/certificates. PKCS#15 structure supported.
+THIS IS TESTING REPOSITORY FOR OsEID PROJECT, please do not use this
+unless You are testing new OsEID features (usually not fully functional).
 
-USB token with CCID interface based on atmel xmega128a4u with same features as card.
+Stable version of OsEID project is available at https://github.com/popovec/oseid
 
-Online HTML doc https://popovec.github.io/OsEID/
 
-PDF documentation: download OSEID.20190102.tgz from https://oseid.sourceforge.io
+

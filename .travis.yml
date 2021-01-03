@@ -7,6 +7,7 @@ matrix:
       env:
         - RUN_TESTS=yes
         - OPENSC_FROM_GIT=no
+        - OPENSC_SYM_HW_CRYPT=yes
 
 addons:
   apt_packages:
@@ -29,6 +30,18 @@ befire_script:
        git clone https://github.com/OpenSC/OpenSC;
        set -ex;
        cd OpenSC/;
+       ./bootstrap;
+       ./configure;
+       sudo make install;
+       export LD_LIBRARY_PATH=/usr/local/lib;
+       cd ${TRAVIS_BUILD_DIR};
+    fi
+
+  - if [ "${OPENSC_SYM_HW_CRYPT}" = "yes" ]; then
+       git clone https://github.com/popovec/OpenSC;
+       set -ex;
+       cd OpenSC/;
+       git checkout sym_hw_encrypt;
        ./bootstrap;
        ./configure;
        sudo make install;
@@ -67,12 +80,12 @@ script:
        ./OsEID-tool RSA-CREATE-KEYS;
        ./OsEID-tool RSA-UPLOAD-KEYS;
        ./OsEID-tool RSA-DECRYPT-TEST;
-       ./OsEID-tool RSA-SIGN-PKCS11-TEST;
        ./OsEID-tool EC-CREATE-KEYS;
        ./OsEID-tool EC-UPLOAD-KEYS;
        ./OsEID-tool EC-SIGN-TEST;
        ./OsEID-tool EC-ECDH-TEST;
        ./OsEID-tool DES-AES-UPLOAD-KEYS;
+       [ "${OPENSC_SYM_HW_CRYPT}" = "yes" ] && ./OsEID-tool AES-TEST;
        kill -9 $PID;
        set +ex;
     fi
