@@ -3,7 +3,7 @@
 
     This is part of OsEID (Open source Electronic ID)
 
-    Copyright (C) 2015-2020 Peter Popovec, popovec.peter@gmail.com
+    Copyright (C) 2015-2021 Peter Popovec, popovec.peter@gmail.com
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -149,6 +149,12 @@ security_enable & 0x8000 = admin state ON
 
 static uint16_t security_enable __attribute__((section (".noinit")));	//bit mapped security enabled levels (by pin 1..14)
 
+/*
+   0       - deauth all pins
+   1...14  - deauth pin 1..14
+   0xa0    - deauth admin state
+   0xb0    - deauth global unblocker state
+*/
 void
 fs_deauth (uint8_t pin)
 {

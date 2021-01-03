@@ -3,7 +3,7 @@
 
     This is part of OsEID (Open source Electronic ID)
 
-    Copyright (C) 2015-2019 Peter Popovec, popovec.peter@gmail.com
+    Copyright (C) 2015-2020 Peter Popovec, popovec.peter@gmail.com
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -42,9 +42,11 @@ struct iso7816_response
   uint8_t protocol;		// 0 T0 1 T1
   uint16_t Nc;			// 0, Lc not present, 1..65535 Lc
   uint16_t Ne;			// 0, Le not present, 1..65535 Le  (iso allow 65536 here, but for limited RAM in hardware this is not used)
-  uint8_t chaining_active;
+  uint8_t chaining_ins;
+  uint8_t chaining_state;
   uint16_t len16;
   uint16_t tmp_len;		// how many bytes are  stored in response (in case of flag == R_TMP)
+  uint16_t chain_len;		// length of chained APDU
   uint8_t flag;			//check #define below ..
   uint8_t data[APDU_RESP_LEN];
   uint8_t input[APDU_CMD_LEN];
@@ -120,5 +122,11 @@ uint8_t resp_ready (struct iso7816_response *r, uint16_t len);
 #define S0x6e00 	0xe0	//fixed 6e00
 #define S0x6f00 	0xf0	//fixed 6f00
 
-
+// APDU_CHAIN_RUNNING is mask for APDU_CHAIN_ACTIVE and APDU_CHAIN_START
+//  there is test  shaining_state <= APDU_CHAIN_START in code, do no tchange values!
+#define APDU_CHAIN_INACTIVE  0
+#define APDU_CHAIN_START     1
+#define APDU_CHAIN_ACTIVE    2
+#define APDU_CHAIN_RUNNING   3
+#define APDU_CHAIN_LAST      4
 #endif

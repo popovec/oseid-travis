@@ -3,7 +3,7 @@
 
     This is part of OsEID (Open source Electronic ID)
 
-    Copyright (C) 2015-2020 Peter Popovec, popovec.peter@gmail.com
+    Copyright (C) 2015-2021 Peter Popovec, popovec.peter@gmail.com
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -63,10 +63,15 @@
 #error RSA_BYTES over 128, for atmega only 256 byte buffers are reserved!
 #endif
 
+#ifndef I_VECTOR_MAX
+#define I_VECTOR_MAX 16
+#endif
 static uint8_t sec_env_reference_algo __attribute__((section (".noinit")));
 static uint16_t key_file_uuid __attribute__((section (".noinit")));
 static uint16_t target_file_uuid __attribute__((section (".noinit")));
-static uint8_t i_vector[16] __attribute__((section (".noinit")));
+static uint8_t i_vector_tmp[I_VECTOR_MAX]
+  __attribute__((section (".noinit")));
+static uint8_t i_vector[I_VECTOR_MAX] __attribute__((section (".noinit")));
 static uint8_t i_vector_len __attribute__((section (".noinit")));
 
 
@@ -625,11 +630,29 @@ Key wrap/unwrap
 //              for RSA operations   : 0x80, 0x81, 0x84
 //              for RSA + WRAP/UNWRAP: 0x80, 0x81, 0x84, 0x87
 //              for AES + WRAP/UNWRAP: 0x80, 0x81, 0x83?/0x84?, 0x87
-//              for AES/DES          : 0x80, 0x81, 0x83?/0x84?, 0x87
+//              for AES/DES          : 0x80, 0x81, 0x83/0x84?, 0x87
+// thanks to hhonkanen, tag 0x83 is necessary for symmetric operations!
 
-// tests on MyEID 4.0.1: AES 256 key in 4d 04
-// 00 22 81 b8 19 80 01 00 81 02 4d 04 87 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  -> 90 00 encipher
-// 00 22 41 b6 19 80 01 00 81 02 4d 04 87 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  -> 90 00 decipher
+/* Example sequence of APDUs for AEs encipher/decipher: (tested on MyEID)
+file 4d04 - AES key:
+IV vector size must match cypher (DES8 bytes AES 16 bytes) MSO operation ends OK but PSO
+fails with 69 85 : Command not allowed. Conditions of use not satisfied.
+For wrong size of PSO (not 8 or 16 bytes.. ) 67 00 : Wrong length.
+Encipher (ECB)
+echo "00 A4 00 00 00"|scriptor -p T=1
+echo "00 A4 00 00 02 50 15"|scriptor
+echo "00 A4 00 00 02 4d 04"|scriptor
+echo "00 20 00 01 08 31 31 31 31 31 31 31 31"|scriptor
+echo "00 22 81 b8 1C 80 01 00 81 02 4d 04 83 01 00 87 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"|scriptor
+echo "00 2a 84 80 10 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 00"|scriptor
+Decipher (ECB):
+echo "00 A4 00 00 00"|scriptor -p T=1
+echo "00 A4 00 00 02 50 15"|scriptor
+echo "00 A4 00 00 02 4d 04"|scriptor
+echo "00 20 00 01 08 31 31 31 31 31 31 31 31"|scriptor
+echo "00 22 41 b8 1c 80 01 00 81 02 4d 04 83 01 00 87 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "|scriptor
+echo "00 2a 80 84 10 AA E0 06 A6 28 AB 33 21 CD 46 0D 43 C1 71 EA 4F 00"|scriptor
+*/
 
 #if 0
 // MyEID manual 2.1.4: P1 must be set to 0xA4 for ECDH, but opensc 0.17 set
@@ -729,7 +752,7 @@ Key wrap/unwrap
 	  DPRINT ("added file reference s_env=%02x\n", s_env);
 
 	  break;
-	case 0x83:
+	case 0x83:		// MyEID requeres this for AES!
 	case 0x84:
 	  if (taglen == 2)	// TARGET FILE ID (for UNWRAP)
 	    {
@@ -779,8 +802,8 @@ Key wrap/unwrap
 static uint8_t
 security_operation_rsa_ec_sign (struct iso7816_response *r)
 {
-  uint8_t flag = 0xff;
-  uint16_t size = r->tmp_len;
+  uint8_t flag;
+  uint16_t size = r->Nc;
 
 // is security enviroment set to sign ?
   if ((sec_env_valid &
@@ -800,12 +823,20 @@ security_operation_rsa_ec_sign (struct iso7816_response *r)
   DPRINT ("sec environment %0x2 valid sign algo = 0x%02x, message len %d\n",
 	  sec_env_valid, sec_env_reference_algo, size);
 
+  // Wait for full APDU if chaining is active
+  if (r->chaining_state & APDU_CHAIN_RUNNING)
+    {
+      DPRINT ("APDU chaining is active, waiting more data\n");
+      return S_RET_OK;
+    }
+
+  // this is  long operation, start sending NULL
+  card_io_start_null ();
+
 // SIGN operation posible values for reference algo: 0,2,4,0x12
   if (sec_env_reference_algo == 4)
     {
       DPRINT ("RAW-ECDSA-PKCS algo %02x\n", sec_env_reference_algo);
-      // this is  long operation, start sending NULL
-      card_io_start_null ();
       // in buffer RAW data to be signed
       return sign_ec_raw (r->input + 5, r, size);
     }
@@ -827,28 +858,24 @@ security_operation_rsa_ec_sign (struct iso7816_response *r)
   else
     return S0x6985;		//    Conditions not satisfied
 
-  if (flag != 0xff)
-    {
-      // this is  long operation, start sending NULL
-      card_io_start_null ();
-      size = rsa_raw (size, r->input + 5, r->data, flag);
-
+  size = rsa_raw (size, r->input + 5, r->data, flag);
 //  DPRINT ("RSA calculation %s, returning APDU\n", size ? "OK":"FAIL");
-      if (size != 0)
-	{
-	  DPRINT ("RSA sign OK\n");
-	  return resp_ready (r, size);
-	}
-      else
-	{
-	  return S0x6985;	//    Conditions not satisfied
-	}
+  if (size != 0)
+    {
+      DPRINT ("RSA sign OK\n");
+      return resp_ready (r, size);
     }
+  return S0x6985;		//    Conditions not satisfied
+}
 
-//  DPRINT ("sec environment %0x2 valid sign algo = 0x%02x, message len %d\n",
-  //sec_env_valid, sec_env_reference_algo, message[4]);
-  DPRINT ("TODO .. this is unsupported now\n");
-  return S0x6a81;		//Function not supported
+
+static void
+apply_iv (uint8_t * data)
+{
+  uint8_t i;
+
+  for (i = 0; i < i_vector_len; i++)
+    data[i] ^= i_vector_tmp[i];
 }
 
 static uint8_t
@@ -857,16 +884,26 @@ des_aes_cipher (uint16_t size, uint8_t * data, struct iso7816_response *r,
 {
   uint8_t type;
   uint8_t ksize;
+  uint8_t bsize;
+  uint16_t offset;
+  uint16_t iv[I_VECTOR_MAX];
+  uint8_t flag = 0;
 
-
-// there is 256 bytes free in r-data
+// there is over 256 bytes free in r-data, fs_key_read_part() return at max 256 bytes
   ksize = fs_key_read_part (r->data, 0xa0);
 
+// 0 - wrong file, no data in key file, ni PID verified...
+  if (!ksize)
+    return S0x6985;		//    Conditions not satisfied
+
   type = fs_get_file_type ();
-  DPRINT ("key type =%02x\n", type);
+  DPRINT ("key type =%02x size=%d\n", type, size);
   if (type == 0x19)		// DES
     {
-      uint8_t flag;
+      bsize = 8;
+
+      if (mode)
+	flag |= DES_DECRYPTION_MODE;
 
 #if ENABLE_DES56
 // allow use 7 or 8 bytes as DES key
@@ -883,48 +920,131 @@ des_aes_cipher (uint16_t size, uint8_t * data, struct iso7816_response *r,
 	}
       else if (ksize == 24)
 	flag = DES_3DES;
-      else if (ksize == 8)
-	flag = 0;
-      else
+      else if (ksize != 8)
 	return S0x6981;		//incorect file type
-      if (size != 8)
-	return S0x6700;		//Incorrect length
-      if (mode)
-	flag |= DES_DECRYPTION_MODE;
-      des_run (data, r->data, flag);
-      memcpy (r->data, data, size);
-      return resp_ready (r, size);
     }
   else if (type == 0x29)	// AES
     {
-      if (size != 16)
-	return S0x6700;		//Incorrect length
-      aes_run (data, r->data, ksize, mode);
-      memcpy (r->data, data, size);
-      return resp_ready (r, size);
+      bsize = 16;
+      // do not check exact key sizes (32,24,16), AES is running
+      // with wrong keysize (1.15,16..23,25..31) but fails in
+      // decipher/encipher. This alow us to save FLASH space.
+      if (ksize > 32)
+	return S0x6981;		//incorect file type
+/*
+      switch (ksize)
+	{
+	case 16:
+	case 24:
+	case 32:
+	  break;
+	default:
+	  return S0x6981;	//incorect file type
+	}
+*/
     }
   else
     return S0x6981;		//incorect file type
+
+// there is no padding implemented .. input must macth block size
+  if (size & (bsize - 1))
+    return S0x6700;		//Incorrect length
+
+  for (offset = 0; offset < size; offset += bsize)
+    {
+      if (mode == 0)
+	apply_iv (data + offset);
+      else
+	memcpy (iv, data + offset, bsize);
+
+      if (type == 0x29)
+	aes_run (data + offset, r->data, ksize, mode);
+      else
+	des_run (data + offset, r->data, flag);
+
+      if (mode == 0)
+	memcpy (i_vector_tmp, data + offset, bsize);
+      else
+	{
+	  apply_iv (data + offset);
+	  memcpy (i_vector_tmp, iv, bsize);
+	}
+    }
+  memcpy (r->data, data, size);
+  return resp_ready (r, size);
 }
 
-
 static uint8_t
-decipher (uint8_t * message, struct iso7816_response *r, uint16_t size)
+decipher (struct iso7816_response *r)
 {
+  uint8_t ret;
+  uint16_t size;
+  uint8_t padding, p2;
+  uint8_t *message = r->input;
 
   DPRINT ("%s\n", __FUNCTION__);
+
 // check key type, if DES/AES key is selected - key must be tagged with 0xa0 tag
   if (fs_key_read_part (NULL, 0xA0))
     {
-// allow AES, DES only for experimental purposes (CLA 0x80)
-      if (message[0] != 0x80)
+      if (M_P2 != 0x84)
+	return S0x6a86;		//Incorrect parameters P1-P2
+      DPRINT ("chain state %d\n", r->chaining_state);
+      if (r->chaining_state <= APDU_CHAIN_START)
 	{
-	  DPRINT ("DES/AES allowed only for CLA 0x80 (0x%02x)\n", message[0]);
-	  return S0x6a81;	//function not supported
+	  DPRINT ("setting up temporary IV vector\n");
+	  memcpy (i_vector_tmp, i_vector, i_vector_len);
 	}
-      return des_aes_cipher (size, message + 5, r, 1 /*DECRYPTION_MODE */ );
+
+      ret = des_aes_cipher (r->Nc, message + 5, r, 1 /*DECRYPTION_MODE */ );
+      return ret;
     }
+
+  // Wait for full APDU if chaining is active
+  if (r->chaining_state & APDU_CHAIN_RUNNING)
+    {
+      DPRINT ("APDU chaining is active, waiting more data\n");
+      return S_RET_OK;
+    }
+// RSA decipher - P2 0x84 CT in data field, 0x86 padding + CT in data field
+// P2 is already checked, (0x84 or 0x86 ) in security_operation()
+  size = r->Nc;
+  p2 = M_P2;
   message += 5;
+
+  padding = 0;
+  // 0x84 is checked in previosu code ..
+  if (p2 == 0x86)
+    {
+      padding = *(message++);
+      size--;
+      DPRINT ("message contain padding indicator %02x, size=%d\n", padding,
+	      size);
+    }
+  if (padding != 0x82)		// 0 or 0x81 (another codes checked below)
+    {
+      r->tmp_len = 0;
+      r->flag = R_TMP;
+    }
+  memcpy (r->data + r->tmp_len, message, size);
+  r->tmp_len += size;
+  r->Nc = r->tmp_len;
+  memcpy (message, r->data, r->Nc);
+
+  if (padding == 0x81)
+    {
+      DPRINT ("1st part of message in TMP buffer\n");
+      return S_RET_OK;
+    }
+  memcpy (message, r->data, r->Nc);
+  if (padding != 0x82 && padding != 0)
+    {
+      DPRINT ("Unkonwn padding indicator %02x\n", padding);
+      return S0x6984;
+    }
+  DPRINT ("All data available (%d bytes), running security OP\n", r->Nc);
+  // ok all data concatenated, do real OP
+
 // RSA decrypt, and optional padding remove
   card_io_start_null ();
   size = rsa_raw (size, message, r->data, 0);
@@ -976,9 +1096,11 @@ decipher (uint8_t * message, struct iso7816_response *r, uint16_t size)
   return resp_ready (r, size);
 }
 
+
 static uint8_t
 security_operation_encrypt (struct iso7816_response *r)
 {
+  uint8_t ret;
   DPRINT ("%s\n", __FUNCTION__);
 
   if ((sec_env_valid &
@@ -988,15 +1110,16 @@ security_operation_encrypt (struct iso7816_response *r)
       DPRINT ("security env not valid\n");
       return S0x6985;		//    Conditions not satisfied
     }
-// allow AES, DES only for experimental purposes (CLA 0x80)
-  if (r->input[0] != 0x80)
+  DPRINT ("chain state %d\n", r->chaining_state);
+  if (r->chaining_state <= APDU_CHAIN_START)
     {
-      DPRINT ("DES/AES allowed only for CLA 0x80 (0x%02x)\n", r->input[0]);
-      return S0x6a81;		//function not supported
+      DPRINT ("setting up temporary IV vector\n");
+      memcpy (i_vector_tmp, i_vector, i_vector_len);
     }
-  DPRINT ("return enrypted data\n");
+  DPRINT ("return enrypted data, cla = %02x\n", r->input[0]);
+  ret = des_aes_cipher (r->Nc, r->input + 5, r, 0);
 
-  return des_aes_cipher (r->tmp_len, r->input + 5, r, 0);
+  return ret;
 }
 
 
@@ -1004,9 +1127,8 @@ static uint8_t
 security_operation_decrypt (struct iso7816_response *r)
 {
   uint8_t ret;
-  DPRINT ("%s\n", __FUNCTION__);
 
-  // if this is end of chain or single APDU, run operation ..
+  DPRINT ("%s\n", __FUNCTION__);
 
   if ((sec_env_valid & (SENV_ENCIPHER | SENV_FILE_REF | SENV_REF_ALGO))
       == (SENV_ENCIPHER | SENV_FILE_REF | SENV_REF_ALGO))
@@ -1017,9 +1139,10 @@ security_operation_decrypt (struct iso7816_response *r)
       return S0x6985;		//    Conditions not satisfied
     }
 
-  ret = decipher (r->input, r, r->tmp_len);
+  ret = decipher (r);
   // for Unwrap operation write data to file
-  if (ret == S_RET_OK && sec_env_valid & SENV_TARGET_ID)
+  if (ret == S_RET_OK && sec_env_valid & SENV_TARGET_ID
+      && (!(r->chaining_state & APDU_CHAIN_RUNNING)))
     {
       uint8_t type;
       uint8_t *keydata;
@@ -1051,6 +1174,25 @@ security_operation_decrypt (struct iso7816_response *r)
   return ret;
 }
 
+/*
+$ pkcs15-init --generate-key rsa/1024 --user-consent 1 --auth-id 1 --pin 11111111 --label UC1
+FCI ..  85 02 11 00 - deauth PIN1
+//$ pkcs15-init --generate-key rsa/1024 --user-consent 0 --auth-id 1 --pin 11111111 --label UC0
+FCI ... 85 02 01 00 - no deauth
+*/
+
+static void
+select_back_and_deauth (uint16_t uuid)
+{
+  uint8_t auth_id;
+
+  auth_id = (fs_get_file_proflag () >> 12);
+  // if here is 0, do not call fs_deauth() - it would deauth all PINs
+  if (auth_id)
+    fs_deauth (auth_id);
+
+  fs_select_uuid (uuid, NULL);	// select back old file
+}
 
 //APDU: 00 86 00 00 35
 // Dynamic auth template:
@@ -1194,7 +1336,8 @@ myeid_ecdh_derive (uint8_t * message, struct iso7816_response *r)
   card_io_start_null ();
 
   dret = ec_derive_key (derived_key, ec);
-  fs_select_uuid (uuid, NULL);	// select back old file
+
+  select_back_and_deauth (uuid);
 
   if (dret)
     return S0x6985;		//    Conditions not satisfied
@@ -1208,19 +1351,19 @@ uint8_t
 security_operation (uint8_t * message, struct iso7816_response *r)
 {
   uint16_t uuid;
-  uint8_t op, ret_data, p2;
+  uint8_t op, ret_data;
   uint8_t ret;
-  uint16_t size;
-  uint8_t padding;
 
   DPRINT ("%s %02x %02x\n", __FUNCTION__, M_P1, M_P2);
 
-  ret = S0x6a86;		//Incorrect parameters P1-P2;
 /*
   check P1, P2, convert P1,P2 to two variables:
   op /SIGN 0x9E/ENCIPHER 0x84/DECIPHER 0/
   ret_data 0x80/0 (return data/save data to file)
   or raise error Incorrect parameters P1-P2
+SIGNATURE: 9E 9A
+ENCIPHER:  84 00 || 84 80
+DECIPHER:  00 84 || 80 84 || 00 86 || 80 86
 */
   op = M_P1;
   ret_data = M_P2;
@@ -1237,53 +1380,14 @@ security_operation (uint8_t * message, struct iso7816_response *r)
       op = 0;
     }
   else
-    goto err;			// ret is already set to  S0x6a86 - Incorrect parameters P1-P2
+    return S0x6a86;		// Incorrect parameters P1-P2
 
   // result into file (0x00) or return result (0x80)
   if (ret_data & 0x7f)
-    goto err;			// ret is already set to  S0x6a86 - Incorrect parameters P1-P2
+    return S0x6a86;		// Incorrect parameters P1-P2
 
-  ret = S0x6984;		//invalid data
-// Nc is always > 0  - checked in parser
-
-  size = r->Nc;
-  p2 = M_P2;
-  message += 5;
-
-  padding = 0;
-  if (p2 == 0x86)
-    {
-      padding = *(message++);
-      size--;
-    }
-
-  if (padding != 0x82)
-    {
-      r->tmp_len = 0;
-      r->flag = R_TMP;
-    }
-  memcpy (r->data + r->tmp_len, message, size);
-  r->tmp_len += size;
-
-  if (padding == 0x81)
-    {
-      DPRINT ("1st part of message in TMP buffer\n");
-      return S_RET_OK;
-    }
-
-  if (padding != 0x82 && padding != 0)
-    {
-      DPRINT ("Unkonwn padding indicator %02x\n", padding);
-      return ret;
-    }
-
-
-  DPRINT ("All data available (%d bytes), running security OP\n", r->tmp_len);
-  // ok all data concatenated, do real OP
   uuid = fs_get_selected_uuid ();	// save old selected file
   fs_select_uuid (key_file_uuid, NULL);
-  memcpy (r->input + 5, r->data, r->tmp_len);
-
   switch (op)
     {
     case 0x9e:
@@ -1298,20 +1402,10 @@ security_operation (uint8_t * message, struct iso7816_response *r)
 	r->Ne = 0;
       ret = security_operation_decrypt (r);
       break;
+    default:
+      ret = S0x6a86;		// Incorrect parameters P1-P2
     }
-
-  // return back old selected file
-  fs_select_uuid (uuid, NULL);
-#ifdef RR_ALWAYS
-  // version of OsEID card up to 1.jul.2017 does this always ..
-  fs_reset_security ();
-#elifdef RR_PROPFLAG
-  // TODO check original aventra card .. if this realy unauth PIN ..
-  if (fs_get_file_proflag () & 0x0080)
-    fs_reset_security ();
-#endif
-  return ret;
-err:
+  select_back_and_deauth (uuid);
   return ret;
 }
 

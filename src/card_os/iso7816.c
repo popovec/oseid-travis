@@ -66,10 +66,18 @@ resp_ready (struct iso7816_response *r, uint16_t len)
     return S_RET_OK;
 
   r->flag = R_RESP_READY;
+
+// We need S0x6c00 only for operations thats are incomplette
+// without reading whole data returned by command. (For example
+// get_chalenge for authorisation etc.) - not used in OsEID for now.
+#if 0
   if (r->Ne >= len)
     return S0x6100;
   else
     return S0x6c00;
+#else
+  return S0x6100;
+#endif
 }
 
 static void
@@ -214,17 +222,17 @@ iso7816_envelope (void)
       if (iso_response.flag != R_ENVELOPE)
 	{
 	  iso_response.flag = R_ENVELOPE;
-	  iso_response.tmp_len = 0;
+	  iso_response.chain_len = 0;
 	}
       // check if enough space in buffer
-      if (((uint16_t) size + iso_response.tmp_len) > 256)
+      if (((uint16_t) size + iso_response.chain_len) > 256)
 	{
 	  DPRINT ("Message over 256 bytes ?\n");
 	  iso_response.flag = R_NO_DATA;
 	  return S0x6700;	// incorect length
 	}
-      memcpy (iso_response.data + iso_response.tmp_len, message, size);
-      iso_response.tmp_len += size;
+      memcpy (iso_response.data + iso_response.chain_len, message, size);
+      iso_response.chain_len += size;
     }
   else
     {
@@ -632,6 +640,7 @@ parse_apdu (uint16_t input_len)
   uint8_t ins = message[1];
   uint8_t Lc;
   uint16_t Nc, Ne;
+  uint8_t ret;
 
   // PTS is handled in io layer, here is already available:
   // 5 bytes for protocol 0
@@ -825,81 +834,98 @@ parse_apdu (uint16_t input_len)
 #endif //  PROTOCOL_T1
 	}
     }
-
-// handle APDU chaining (bit 7 is already checked - is 0)
-// INS 0 is not udes in OsEId card and is not described in ISO7816 .. use  0 here for chaining
-  if (cla & 0x10)
+// APDU chaining
+//===============
+// Please read continuation of this code below (after command returned a return code)
+// INS 0 is not used in OsEID card and is not described in ISO7816 ..
+// APDU chaining is active if iso_response.chaining_active == INS (inactive == 0)
+  if (iso_response.chaining_state & APDU_CHAIN_RUNNING)
     {
-      DPRINT ("APDU chaining: requested\n");
-      // chaining is allowed only for CASE 3S/E 4S/E
-      // check Nc field, if zero, this is CASE 1,2S/E
-      if (!Nc)
+      DPRINT ("APDU chaining: running\n");
+      iso_response.chaining_state = APDU_CHAIN_ACTIVE;
+      // this may violate the ISO 7816, but this code allow us to insert GET RESPONSE inside running chain
+      // to read intermediate results
+      if (ins == 0xc0)
 	{
-	  DPRINT ("APDU chaining: no data in APDU?\n");
-	  iso_response.chaining_active = 0;
-	  return S0x6700;	// wrong length
-	}
-      if (iso_response.chaining_active == 0)
-	{
-	  DPRINT ("APDU chaining: start\n");
-	  // TODO save P1,P2
-	  iso_response.tmp_len = 0;
-	  iso_response.chaining_active = ins;
-	}
-      else
-	{
-	  DPRINT ("APDU chaining: running\n");
-	  // TODO check P1,P2
-	  if (iso_response.chaining_active != ins)
+	  DPRINT ("APDU chaining: GET RESPONSE inserted in chain\n");
+	  if (Nc)
 	    {
-	      DPRINT ("APDU chaining: INS changed %02x %02x\n",
-		      iso_response.chaining_active, ins);
-	      iso_response.chaining_active = 0;
+	      DPRINT ("APDU chaining: Nc in GET RESPONSE\n");
+	      iso_response.chaining_state = APDU_CHAIN_INACTIVE;
 	      return S0x6883;	// expected last command of chain
 	    }
 	}
-      // check if there is space in temp buffer
-      if (iso_response.tmp_len + Nc > APDU_RESP_LEN)
+      else
 	{
-	  iso_response.chaining_active = 0;
-	  return S0x6700;	// wrong length
+	  if (iso_response.chaining_ins != ins)
+	    {
+
+	      DPRINT ("APDU chaining: INS changed %02x %02x\n",
+		      iso_response.chaining_ins, ins);
+	      iso_response.chaining_state = APDU_CHAIN_INACTIVE;
+	      return S0x6883;	// expected last command of chain
+	    }
+	  // chaining is allowed only for CASE 3S/E 4S/E
+	  // check Nc field, if zero, this is CASE 1,2S/E
+	  if (!Nc)
+	    {
+	      DPRINT ("APDU chaining: no data in APDU?\n");
+	      iso_response.chaining_state = APDU_CHAIN_INACTIVE;
+	      return S0x6700;	// wrong length
+	    }
+	  // check if there is space in temp buffer (there is no oveflow)
+	  if (iso_response.chain_len + Nc > APDU_RESP_LEN)
+	    {
+	      DPRINT ("APDU chaining: No space in buffer\n");
+	      iso_response.chaining_state = APDU_CHAIN_INACTIVE;
+	      return S0x6700;	// wrong length
+	    }
+	  if (cla & 0x10)
+	    {
+	      DPRINT ("APDU chaining: continuing\n");
+	    }
+	  else
+	    {
+	      DPRINT ("APDU chaining: last APDU in chain\n");
+	      iso_response.chaining_state = APDU_CHAIN_LAST;
+	    }
 	}
-      // copy data into temp buffer
-      memcpy (iso_response.data + iso_response.tmp_len, message + 5, Nc);
-      iso_response.tmp_len += Nc;
-      return S_RET_OK;
     }
   else
     {
-      if (iso_response.chaining_active != 0)
+      iso_response.chain_len = 0;	// no chaining active, clear chain_len
+      iso_response.chaining_state = APDU_CHAIN_INACTIVE;
+      if (cla & 0x10)
 	{
-	  DPRINT ("APDU chaining: last APDU\n");
-	  iso_response.chaining_active = 0;
-	  if (Nc)
-	    {
-	      // check if there is space in temp buffer
-	      if (iso_response.tmp_len + Nc > APDU_RESP_LEN)
-		{
-		  return S0x6700;	// wrong length
-		}
-	      // copy data into temp buffer
-	      memcpy (iso_response.data + iso_response.tmp_len,
-		      message + 5, Nc);
-	      iso_response.tmp_len += Nc;
-	    }
-	  else
+	  DPRINT ("APDU chaining: start\n");
+	  // chaining is allowed only for CASE 3S/E 4S/E
+	  // check Nc field, if zero, this is CASE 1,2S/E
+	  if (!Nc)
 	    {
 	      DPRINT ("APDU chaining: no data in APDU?\n");
 	      return S0x6700;	// wrong length
 	    }
-	  // OK whole APDU in iso_response.data
-	  // Ne is already set
-	  Nc = iso_response.tmp_len;
-	  memcpy (message + 5, iso_response.data, Nc);
-	  // P3 is fixed below (for APDUs where Nc < 256)
+	  // TODO save P1,P2
+	  iso_response.chaining_ins = ins;
+	  iso_response.chaining_state = APDU_CHAIN_START;
+	}
+      else
+	{
+	  DPRINT ("APDU chaining: not active\n");
 	}
     }
-
+  // concatenate this APDU with previous APDU (if chain is not running chain_len = 0)
+  // then only this single APDU is in APDU input buffer
+  // this does not affect GET_RESPONSE, because always Nc is 0
+  // and this does not affect chaning, because chained ADPU has Nc > 0
+  if (Nc)
+    {
+      memcpy (iso_response.data + iso_response.chain_len, message + 5, Nc);
+      iso_response.chain_len += Nc;
+      Nc = iso_response.chain_len;
+      memcpy (message + 5, iso_response.data, Nc);
+    }
+// P3 is fixed below (for APDUs where Nc < 256)
 // message+5 is always position of data, functions can use Ne, Nc  or P3 if P3 !=0  (P3 is then Nc 1..255)
 // if function does not have APDU_LONG flag:
 // if function does not accept Nc > 255, return error 0x6700
@@ -920,7 +946,6 @@ parse_apdu (uint16_t input_len)
 	  Ne = 256;
 	}
     }
-
 // INS does not allow Ne or need Ne
   if (Ne)
     {
@@ -978,9 +1003,45 @@ input:
 	iso_response.flag  is set to R_RESP_READY and
 	iso_response.len16 represent number of returned data bytes (up to APDU_RESP_LEN)
 	SW must be set to S0x6100
+
+	If APDU chaining is active, command may or may not proceed input buffer.
+	- If command return 0x9000 status, APDU data are moved into temp buffer and
+	  used for concatenization with next APDU.
+	- If command return data (0x61xx), APDU temp buffer is cleared (now used for response).
+	   GET_RESPONSE can be inserted into chain to retrieve data
+	- If comand return any another return code, APDU chaining is interrupted.
 */
 
-  return ((c->func) ());
+  ret = ((c->func) ());
+  DPRINT ("command return code %02x\n", ret);
+  // APDU chaining - continuation
+  if (iso_response.chaining_state & APDU_CHAIN_RUNNING)
+    {
+/*
+a) command ends with 0x9000
+   - iso_response.data has old content (not used) because command is waiting mode data in APDU chain
+b)  command ends with 0x6100
+   - iso_response.data is filled by response, old APDU is in iso_response.input, all data in input APDU are already proccessed
+c) any other return code = error
+*/
+      DPRINT ("APDU chaining: ");
+      if (ret == S_RET_OK)
+	{
+	  DPRINT ("Waiting more data\n");
+	}
+// 0x6c00 is not used in OsEID..
+      else if (ret == S0x6100 /* || ret == S0x6c00 */ )
+	{
+	  DPRINT ("intermediate data available, clearing APDU buffer\n");
+	  iso_response.chain_len = 0;
+	}
+      else
+	{
+	  DPRINT ("command error, APDU chain end\n");
+	  iso_response.chaining_state = APDU_CHAIN_INACTIVE;
+	}
+    }
+  return ret;
 }
 
 
@@ -1005,5 +1066,6 @@ response_clear (void)
 {
   iso_response.flag = R_NO_DATA;
   // clear chaining
-  iso_response.chaining_active = 0;
+//  iso_response.chaining_active = 0;
+  iso_response.chaining_state = APDU_CHAIN_INACTIVE;
 }
