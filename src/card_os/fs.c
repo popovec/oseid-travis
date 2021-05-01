@@ -611,7 +611,7 @@ fs_return_pin_info (uint8_t pin, struct iso7816_response *r)
   if (sec_device_read_block
       (r->data, position + offsetof (struct pin, pin_retry), len))
       return S0x6581;		//memory fail
-  return resp_ready (r, len);
+  RESP_READY (len);
 }
 
 //change lifecycle, this enables all FS security ACL
@@ -1278,7 +1278,7 @@ fs_get_fci (struct iso7816_response *r)
 				 fci_sel.fs.name_size))
 	    return S0x6581;	// memory fail
 	}
-      return resp_ready (r, r->data[1] + 2);
+      RESP_READY (r->data[1] + 2);
     }
   return S0x6100;
 #else
@@ -1329,7 +1329,7 @@ fs_get_fci (struct iso7816_response *r)
   *(position++) = 0x8a;
   *(position++) = 1;
   *(position++) = get_lifecycle ();
-  return resp_ready (r, r->data[1] + 2);
+  RESP_READY (r->data[1] + 2);
 #endif
 }
 
@@ -1671,7 +1671,7 @@ fs_read_binary (uint16_t offset, struct iso7816_response *r)
 
   if (1 == device_read_block (r->data, offset, dlen & 0xff))
     return S0x6581;		// Memory failure, do not return 0x6281 - part of data is corrupted
-  return resp_ready (r, dlen);
+  RESP_READY (dlen);
 }
 
 uint8_t
@@ -2126,7 +2126,7 @@ fs_list_files (uint8_t type, struct iso7816_response *r)
       if (fr.fs.id == 0)
 	return S_RET_OK;
       DPRINT ("%d %d\n", r->len16, fr.fs.id);
-      return resp_ready (r, (fr.fs.id << 1));
+      RESP_READY (fr.fs.id << 1);
     }
   return S0x6a82;		//file not found
 }

@@ -6,8 +6,8 @@ matrix:
       dist: focal
       env:
         - RUN_TESTS=yes
-        - OPENSC_FROM_GIT=no
-        - OPENSC_SYM_HW_CRYPT=yes
+        - OPENSC_FROM_GIT=yes
+        - OPENSC_SYM_HW_CRYPT=no
 
 addons:
   apt_packages:
@@ -23,8 +23,7 @@ addons:
     - ant
     - socat
     - cmake
-    - opensc
-   
+    
 befire_script:
   - if [ "${OPENSC_FROM_GIT}" = "yes" ]; then
        git clone https://github.com/OpenSC/OpenSC;

@@ -3,7 +3,7 @@
 
     This is part of OsEID (Open source Electronic ID)
 
-    Copyright (C) 2015-2020  Peter Popovec, popovec.peter@gmail.com
+    Copyright (C) 2015-2021 Peter Popovec, popovec.peter@gmail.com
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@
 #define N_CARD_ID	1
 #define S_CARD_ID	20
 #if 1
-#define C_CARD_ID	  'O','s','E','I','D',4,5,1,\
+#define C_CARD_ID	  'O','s','E','I','D',4,5,2,\
                           0,0,0,0,0,0,0,0,0,1,0,0
 #else
 #define C_CARD_ID	  'O','s','E','I','D',4,2,16,\
