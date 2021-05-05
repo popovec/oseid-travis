@@ -23,6 +23,14 @@ addons:
     - ant
     - socat
     - cmake
+
+before_install:
+  - if [ "${TRAVIS_DIST}" = "focal" ]; then
+       sudo apt-get install -yq --allow-downgrades libc6=2.31-0ubuntu9.2 libc6-dev=2.31-0ubuntu9.2;
+       sudo apt-get install -yq clang-tidy-10;
+    else
+       sudo apt-get install -y clang-tidy;
+    fi
     
 befire_script:
   - if [ "${OPENSC_FROM_GIT}" = "yes" ]; then
